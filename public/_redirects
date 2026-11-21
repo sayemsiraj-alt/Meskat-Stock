@@ -1,0 +1,6 @@
+/app-manifest.webmanifest      /.netlify/functions/pwa?asset=manifest           200
+/app-icon-192.png              /.netlify/functions/pwa?asset=icon-192           200
+/app-icon-512.png              /.netlify/functions/pwa?asset=icon-512           200
+/app-icon-maskable-512.png     /.netlify/functions/pwa?asset=icon-maskable-512  200
+/app-apple-touch-icon.png      /.netlify/functions/pwa?asset=apple-touch-icon   200
+/*                             /index.html                                      200
