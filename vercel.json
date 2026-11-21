@@ -33,7 +33,7 @@
       "destination": "/api/courier"
     },
     {
-      "source": "/((?!api/|assets/).*)",
+      "source": "/((?!api/|assets/|app-manifest\\.webmanifest|app-icon-|app-apple-touch-icon\\.png|.*\\.(?:js|mjs|css|png|jpg|jpeg|gif|svg|webp|ico|json|webmanifest|woff|woff2|ttf|txt|xml|map)).*)",
       "destination": "/index.html"
     }
   ],
