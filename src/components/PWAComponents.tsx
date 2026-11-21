@@ -191,14 +191,17 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
   const handleApplyBrandingAndReload = async () => {
     setRefreshingBrand(true);
     try {
-      await syncDynamicPwaBranding({
-        brandName: brandName || '',
-        brandShortName: brandShortName || '',
-        storeName: storeName || '',
-        logoUrl: logoUrl || '',
-        activeTheme: activeTheme as any,
-        firebaseProjectId,
-      });
+      await syncDynamicPwaBranding(
+        {
+          brandName: brandName || '',
+          brandShortName: brandShortName || '',
+          storeName: storeName || '',
+          logoUrl: logoUrl || '',
+          activeTheme: activeTheme as any,
+          firebaseProjectId,
+        },
+        { forceRefetch: true }
+      );
       if (typeof window !== 'undefined') {
         window.location.reload();
       }
