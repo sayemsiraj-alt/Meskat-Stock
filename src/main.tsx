@@ -2,11 +2,18 @@ import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
 import App from './App.tsx';
 import './index.css';
+import {
+  extractSwVersionIdentifier,
+  isBrandingSwReloadSuppressed,
+  readStoredSwBrandingVersion,
+  syncServiceWorkerBrandingVersion,
+} from './utils/pwaManifestSync';
 
 declare global {
   interface Window {
     __erpCheckForPwaUpdate?: () => Promise<boolean>;
     __erpApplyPwaUpdate?: () => Promise<void>;
+    __erpSyncSwBrandingVersion?: (versionId: string) => Promise<void>;
   }
 }
 
@@ -14,9 +21,20 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   let refreshing = false;
   const hadControllerAtBoot = Boolean(navigator.serviceWorker.controller);
 
+  window.__erpSyncSwBrandingVersion = async (versionId: string) => {
+    await syncServiceWorkerBrandingVersion(versionId);
+  };
+
   const updateSW = registerSW({
     immediate: true,
+    onNeedReload() {
+      if (isBrandingSwReloadSuppressed()) return;
+      if (refreshing) return;
+      refreshing = true;
+      window.location.reload();
+    },
     onNeedRefresh() {
+      if (isBrandingSwReloadSuppressed()) return;
       window.dispatchEvent(new CustomEvent('erp:pwa-updating'));
       updateSW(true).catch(() => {});
     },
@@ -25,6 +43,16 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
     },
     onRegisteredSW(_swUrl, registration) {
       if (!registration) return;
+
+      const storedBrandingVer = readStoredSwBrandingVersion();
+      const activeSwUrl =
+        registration.active?.scriptURL ||
+        registration.waiting?.scriptURL ||
+        registration.installing?.scriptURL ||
+        '';
+      if (storedBrandingVer && extractSwVersionIdentifier(activeSwUrl) !== storedBrandingVer) {
+        syncServiceWorkerBrandingVersion(storedBrandingVer).catch(() => {});
+      }
 
       const checkUpdate = async () => {
         try {
@@ -62,8 +90,9 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
     },
   });
 
-  // Automatically reload page when a new Service Worker takes control after an update
+  // Automatically reload page when a new Service Worker takes control after a real deployment update
   navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (isBrandingSwReloadSuppressed()) return;
     if (!hadControllerAtBoot) return;
     if (refreshing) return;
     refreshing = true;
