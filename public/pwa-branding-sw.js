@@ -21,6 +21,59 @@ const LEGACY_BRANDING_PATHS = new Set([
   '/apple-touch-icon.png',
 ]);
 
+self.addEventListener('message', (event) => {
+  const data = event && event.data;
+  if (!data || data.type !== 'ERP_SYNC_BRANDING') return;
+
+  const version = typeof data.version === 'string' ? data.version.trim() : '';
+  const targets = [
+    ...(typeof data.manifestUrl === 'string' && data.manifestUrl ? [data.manifestUrl] : []),
+    ...(Array.isArray(data.iconUrls) ? data.iconUrls.filter((u) => typeof u === 'string' && u) : []),
+  ];
+
+  event.waitUntil(
+    (async () => {
+      try {
+        const cache = await caches.open(ERP_DYNAMIC_BRANDING_CACHE);
+        const keys = await cache.keys();
+        await Promise.all(
+          keys.map((req) => {
+            try {
+              const reqUrl = new URL(req.url);
+              if (SERVER_BRANDING_PATHS.has(reqUrl.pathname)) {
+                const reqVersion = reqUrl.searchParams.get('v') || '';
+                if (!version || reqVersion !== version) {
+                  return cache.delete(req);
+                }
+              }
+            } catch {
+              // ignore invalid URL
+            }
+            return Promise.resolve(false);
+          })
+        );
+
+        await Promise.all(
+          targets.map(async (url) => {
+            try {
+              const parsed = new URL(url, self.location.origin);
+              if (parsed.origin !== self.location.origin) return;
+              const freshRes = await fetch(parsed.href, { cache: 'reload' });
+              if (freshRes && freshRes.ok) {
+                await cache.put(parsed.href, freshRes.clone());
+              }
+            } catch {
+              // ignore offline/transient fetch failure
+            }
+          })
+        );
+      } catch {
+        // ignore cache error
+      }
+    })()
+  );
+});
+
 self.addEventListener('fetch', (event) => {
   if (!event || !event.request || event.request.method !== 'GET') return;
 
@@ -37,7 +90,7 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       (async () => {
         try {
-          const networkRes = await fetch(event.request);
+          const networkRes = await fetch(event.request, { cache: 'no-store' });
           if (networkRes && networkRes.ok) {
             try {
               const cache = await caches.open(ERP_DYNAMIC_BRANDING_CACHE);
@@ -89,3 +142,4 @@ self.addEventListener('fetch', (event) => {
     })()
   );
 });
+
