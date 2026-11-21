@@ -550,15 +550,319 @@ const readStoredFirebaseProjectId = (): string => {
   return '';
 };
 
+export const SW_BRANDING_VERSION_STORAGE_KEY = 'stock_erp_sw_branding_version';
+
+const BRANDING_SW_RELOAD_SUPPRESS_WINDOW_MS = 10000;
+let suppressNextBrandingSwReloadUntil = 0;
+
+export const markSuppressBrandingSwReload = (windowMs = BRANDING_SW_RELOAD_SUPPRESS_WINDOW_MS) => {
+  suppressNextBrandingSwReloadUntil = Date.now() + windowMs;
+};
+
+export const isBrandingSwReloadSuppressed = (): boolean => {
+  return Date.now() <= suppressNextBrandingSwReloadUntil;
+};
+
+export const consumeBrandingSwReloadSuppression = (): boolean => {
+  if (isBrandingSwReloadSuppressed()) {
+    suppressNextBrandingSwReloadUntil = 0;
+    return true;
+  }
+  return false;
+};
+
+export const buildVersionedSwUrl = (
+  baseSwUrl: string,
+  versionId: string
+): string => {
+  const cleanBase = (baseSwUrl || '/sw.js').trim() || '/sw.js';
+  const cleanVersion = (versionId || '').trim();
+  try {
+    const parsed = new URL(cleanBase, 'https://localhost');
+    if (cleanVersion) {
+      parsed.searchParams.set('v', cleanVersion);
+    } else {
+      parsed.searchParams.delete('v');
+    }
+    const query = parsed.searchParams.toString();
+    return query ? `${parsed.pathname}?${query}` : parsed.pathname;
+  } catch {
+    const pathOnly = cleanBase.split('?')[0] || '/sw.js';
+    return cleanVersion ? `${pathOnly}?v=${encodeURIComponent(cleanVersion)}` : pathOnly;
+  }
+};
+
+export const extractSwVersionIdentifier = (scriptUrl?: string | null): string => {
+  const raw = (scriptUrl || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw, 'https://localhost');
+    return (parsed.searchParams.get('v') || '').trim();
+  } catch {
+    return '';
+  }
+};
+
+export const readStoredSwBrandingVersion = (
+  storage?: Pick<Storage, 'getItem'> | null
+): string => {
+  const target = storage !== undefined ? storage : typeof localStorage !== 'undefined' ? localStorage : null;
+  if (!target) return '';
+  try {
+    return (target.getItem(SW_BRANDING_VERSION_STORAGE_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+};
+
+export interface ServiceWorkerRegistrationLike {
+  active?: { scriptURL?: string; postMessage?: (msg: unknown) => void } | null;
+  waiting?: { scriptURL?: string; postMessage?: (msg: unknown) => void } | null;
+  installing?: { scriptURL?: string; postMessage?: (msg: unknown) => void } | null;
+  update?: () => Promise<unknown>;
+}
+
+export interface ServiceWorkerContainerLike {
+  controller?: { scriptURL?: string; postMessage?: (msg: unknown) => void } | null;
+  getRegistration?: (clientURL?: string) => Promise<ServiceWorkerRegistrationLike | undefined>;
+  register: (
+    scriptURL: string,
+    options?: { scope?: string; updateViaCache?: ServiceWorkerUpdateViaCache }
+  ) => Promise<ServiceWorkerRegistrationLike>;
+}
+
+export interface ServiceWorkerBrandingSyncResult {
+  updated: boolean;
+  previousVersion: string;
+  version: string;
+  swUrl: string;
+  refetchedUrls: string[];
+}
+
+export const refetchDynamicPwaAssets = async (
+  urls: string[],
+  options: {
+    cacheName?: string;
+    cacheStorage?: Pick<CacheStorage, 'open'> | null;
+    fetchFn?: typeof fetch;
+  } = {}
+): Promise<string[]> => {
+  const uniqueUrls = Array.from(
+    new Set(urls.map((u) => (u || '').trim()).filter(Boolean))
+  );
+  if (uniqueUrls.length === 0) return [];
+
+  const fetchImpl =
+    options.fetchFn || (typeof fetch === 'function' ? fetch.bind(globalThis) : null);
+  if (!fetchImpl) return [];
+
+  const cacheTarget =
+    options.cacheStorage !== undefined
+      ? options.cacheStorage
+      : typeof caches !== 'undefined'
+        ? caches
+        : null;
+
+  let cache: Cache | null = null;
+  if (cacheTarget) {
+    try {
+      cache = await cacheTarget.open(options.cacheName || ERP_DYNAMIC_BRANDING_CACHE);
+    } catch {
+      cache = null;
+    }
+  }
+
+  const refetchedUrls: string[] = [];
+  await Promise.all(
+    uniqueUrls.map(async (url) => {
+      try {
+        const res = await fetchImpl(url, { cache: 'reload' });
+        if (res && res.ok) {
+          refetchedUrls.push(url);
+          if (cache) {
+            await cache.put(url, res.clone());
+          }
+        }
+      } catch {
+        // Ignore offline/network failures; runtime fallback cache remains intact
+      }
+    })
+  );
+
+  return refetchedUrls;
+};
+
+let lastSyncedRuntimeBrandingVersion = '';
+
+export const resetBrandingSyncMemoForTests = () => {
+  lastSyncedRuntimeBrandingVersion = '';
+  suppressNextBrandingSwReloadUntil = 0;
+};
+
+export const syncServiceWorkerBrandingVersion = async (
+  versionId: string,
+  options: {
+    swContainer?: ServiceWorkerContainerLike | null;
+    baseSwUrl?: string;
+    scope?: string;
+    storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
+    cacheStorage?: Pick<CacheStorage, 'open'> | null;
+    fetchFn?: typeof fetch;
+    manifestUrl?: string;
+    iconUrls?: string[];
+    forceRefetch?: boolean;
+  } = {}
+): Promise<ServiceWorkerBrandingSyncResult> => {
+  const cleanVersion = (versionId || '').trim();
+  const baseUrl = (options.baseSwUrl || '/sw.js').trim() || '/sw.js';
+  const scope = options.scope || '/';
+  const storageTarget =
+    options.storage !== undefined
+      ? options.storage
+      : typeof localStorage !== 'undefined'
+        ? localStorage
+        : null;
+
+  const storedVersion = readStoredSwBrandingVersion(storageTarget);
+  const swContainer =
+    options.swContainer !== undefined
+      ? options.swContainer
+      : typeof navigator !== 'undefined' && 'serviceWorker' in navigator
+        ? (navigator.serviceWorker as unknown as ServiceWorkerContainerLike)
+        : null;
+
+  let existingReg: ServiceWorkerRegistrationLike | undefined;
+  let existingScriptUrl = '';
+  if (swContainer?.getRegistration) {
+    try {
+      existingReg = await swContainer.getRegistration(scope);
+      existingScriptUrl =
+        existingReg?.active?.scriptURL ||
+        existingReg?.waiting?.scriptURL ||
+        existingReg?.installing?.scriptURL ||
+        swContainer.controller?.scriptURL ||
+        '';
+    } catch {
+      existingReg = undefined;
+    }
+  }
+
+  const activeSwVersion = extractSwVersionIdentifier(existingScriptUrl);
+  const previousVersion = activeSwVersion || storedVersion;
+
+  const isViteDev = Boolean((import.meta as { env?: { DEV?: boolean } })?.env?.DEV);
+  const isDevSw = isViteDev || existingScriptUrl.includes('dev-sw') || baseUrl.includes('dev-sw');
+  const effectiveBaseUrl =
+    existingScriptUrl && existingScriptUrl.includes('dev-sw')
+      ? (() => {
+          try {
+            const u = new URL(existingScriptUrl);
+            return `${u.pathname}${u.search}`;
+          } catch {
+            return baseUrl;
+          }
+        })()
+      : isDevSw
+        ? '/dev-sw.js?dev-sw'
+        : baseUrl;
+
+  const versionedSwUrl = isDevSw
+    ? effectiveBaseUrl
+    : buildVersionedSwUrl(effectiveBaseUrl, cleanVersion);
+  const versionChanged =
+    Boolean(cleanVersion) &&
+    (activeSwVersion !== cleanVersion || storedVersion !== cleanVersion);
+
+  let updated = false;
+
+  if (swContainer && cleanVersion && (versionChanged || !existingReg)) {
+    try {
+      markSuppressBrandingSwReload();
+      const nextReg = isDevSw
+        ? existingReg
+        : await swContainer.register(versionedSwUrl, {
+            scope,
+            updateViaCache: 'none',
+          });
+      updated = Boolean(nextReg) || !isDevSw;
+
+      try {
+        await nextReg?.update?.();
+      } catch {
+        // Ignore transient update check failure
+      }
+
+      const workerTarget =
+        nextReg?.active ||
+        nextReg?.waiting ||
+        nextReg?.installing ||
+        swContainer.controller;
+      workerTarget?.postMessage?.({
+        type: 'ERP_SYNC_BRANDING',
+        version: cleanVersion,
+        manifestUrl: options.manifestUrl || '',
+        iconUrls: options.iconUrls || [],
+      });
+    } catch {
+      // Ignore SW registration failure in restricted environments (e.g. non-HTTPS / tests)
+    }
+  }
+
+  if (storageTarget && cleanVersion) {
+    try {
+      storageTarget.setItem(SW_BRANDING_VERSION_STORAGE_KEY, cleanVersion);
+    } catch {
+      // ignore storage quota errors
+    }
+  }
+
+  const shouldRefetch =
+    Boolean(options.forceRefetch) ||
+    updated ||
+    (Boolean(cleanVersion) &&
+      (lastSyncedRuntimeBrandingVersion !== cleanVersion || storedVersion !== cleanVersion));
+
+  let refetchedUrls: string[] = [];
+  if (shouldRefetch) {
+    const assetUrls = [
+      ...(options.manifestUrl ? [options.manifestUrl] : []),
+      ...(options.iconUrls || []),
+    ];
+    refetchedUrls = await refetchDynamicPwaAssets(assetUrls, {
+      cacheStorage: options.cacheStorage,
+      fetchFn: options.fetchFn,
+    });
+    if (cleanVersion) {
+      lastSyncedRuntimeBrandingVersion = cleanVersion;
+    }
+  }
+
+  return {
+    updated,
+    previousVersion,
+    version: cleanVersion,
+    swUrl: versionedSwUrl,
+    refetchedUrls,
+  };
+};
+
 export const syncDynamicPwaBranding = async (
   settings: Pick<
     SystemSettings,
     'brandName' | 'brandShortName' | 'storeName' | 'logoUrl' | 'activeTheme' | 'firebaseProjectId'
-  >
-): Promise<{ branding: CompanyPwaBranding; icons: GeneratedAppIcons; manifestHref: string }> => {
+  >,
+  options: { forceRefetch?: boolean } = {}
+): Promise<{
+  branding: CompanyPwaBranding;
+  icons: GeneratedAppIcons;
+  manifestHref: string;
+  brandHash: string;
+  swSync?: ServiceWorkerBrandingSyncResult;
+}> => {
   const branding = buildCompanyPwaBranding(settings);
   const firebaseProjectId =
     (settings.firebaseProjectId || '').trim() || readStoredFirebaseProjectId();
+  const brandHash = computeBrandingSignature(branding, firebaseProjectId);
 
   if (typeof document === 'undefined' || typeof window === 'undefined') {
     return {
@@ -569,7 +873,8 @@ export const syncDynamicPwaBranding = async (
         maskable512Url: '/app-icon-maskable-512.png',
         appleTouchUrl: '/app-apple-touch-icon.png',
       },
-      manifestHref: buildDynamicServerManifestPath(branding, { firebaseProjectId }),
+      manifestHref: buildDynamicServerManifestPath(branding, { firebaseProjectId, brandHash }),
+      brandHash,
     };
   }
 
@@ -580,7 +885,6 @@ export const syncDynamicPwaBranding = async (
   upsertHeadMeta('description', branding.description);
 
   const generated = await generateCompanyPwaIcons(branding);
-  const brandHash = computeBrandingSignature(branding, firebaseProjectId);
 
   const serverManifestPath = buildDynamicServerManifestPath(branding, {
     firebaseProjectId,
@@ -624,5 +928,18 @@ export const syncDynamicPwaBranding = async (
     document.head.appendChild(manifestLink);
   }
 
-  return { branding, icons: generated, manifestHref: serverManifestPath };
+  const fullManifestUrl = `${origin}${serverManifestPath}`;
+  const swSync = await syncServiceWorkerBrandingVersion(brandHash, {
+    manifestUrl: fullManifestUrl,
+    iconUrls: [
+      httpIcons.icon192Url,
+      httpIcons.icon512Url,
+      httpIcons.maskable512Url,
+      httpIcons.appleTouchUrl,
+    ],
+    forceRefetch: options.forceRefetch,
+  });
+
+  return { branding, icons: generated, manifestHref: serverManifestPath, brandHash, swSync };
 };
+
