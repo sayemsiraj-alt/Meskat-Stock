@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import {
   detectPwaAssetKind,
   generateDynamicPwaHttpResponse,
-} from '../src/utils/pwaServerRenderer';
+} from '../src/utils/pwaServerRenderer.js';
 
 interface VercelLikeRequest extends IncomingMessage {
   query?: Record<string, string | string[] | undefined>;

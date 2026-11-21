@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { handler as netlifyCourierHandler } from '../netlify/functions/courier';
+import { handler as netlifyCourierHandler } from '../netlify/functions/courier.js';
 
 interface VercelLikeRequest extends IncomingMessage {
   body?: unknown;
