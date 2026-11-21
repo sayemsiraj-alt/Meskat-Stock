@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 import { PNG } from 'pngjs';
 import vercelPwaHandler from '../../api/pwa';
@@ -224,4 +226,51 @@ describe('pwaServerRenderer dynamic manifest & PNG icons', () => {
     const courierJson = JSON.parse(courierRes.getBody().toString('utf-8'));
     assert.equal(courierJson.courier, 'Steadfast');
   });
+
+  it('vercel.json SPA fallback rewrite preserves sw.js, manifests, icons, and dynamic PWA APIs', () => {
+    const vercelConfig = JSON.parse(
+      fs.readFileSync(path.resolve(process.cwd(), 'vercel.json'), 'utf-8')
+    );
+    const spaFallback = vercelConfig.rewrites.find((r: any) => r.destination === '/index.html');
+    assert.ok(spaFallback, 'SPA fallback rewrite to /index.html should exist');
+    const spaRegex = new RegExp(`^${spaFallback.source}$`);
+
+    // Static PWA assets & API routes MUST NOT be rewritten to /index.html
+    for (const staticOrApiPath of [
+      '/sw.js',
+      '/workbox-835c8c05.js',
+      '/pwa-branding-sw.js',
+      '/manifest.webmanifest',
+      '/pwa-192x192.png',
+      '/pwa-512x512.png',
+      '/pwa-maskable-512x512.png',
+      '/apple-touch-icon.png',
+      '/icon.svg',
+      '/firebase-config.json',
+      '/app-manifest.webmanifest',
+      '/app-icon-192.png',
+      '/app-icon-512.png',
+      '/app-icon-maskable-512.png',
+      '/app-apple-touch-icon.png',
+      '/api/pwa',
+      '/api/courier',
+      '/assets/index-1234.js',
+    ]) {
+      assert.equal(
+        spaRegex.test(staticOrApiPath),
+        false,
+        `SPA fallback must NOT hijack ${staticOrApiPath}`
+      );
+    }
+
+    // SPA client routes MUST rewrite to /index.html
+    for (const spaPath of ['/', '/dashboard', '/portal', '/orders']) {
+      assert.equal(
+        spaRegex.test(spaPath),
+        true,
+        `SPA fallback should rewrite ${spaPath} to /index.html`
+      );
+    }
+  });
 });
+
