@@ -1,0 +1,6 @@
+{
+  "name": "Dear Health Care - Stock Management ERP",
+  "description": "Dynamic real-time stock management, retail POS, wholesale billing, and accounts ERP for Dear Health Care Ltd.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

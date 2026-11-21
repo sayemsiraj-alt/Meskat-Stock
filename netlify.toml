@@ -1,0 +1,43 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[[redirects]]
+  from = "/api/pwa"
+  to = "/.netlify/functions/pwa"
+  status = 200
+
+[[redirects]]
+  from = "/api/courier"
+  to = "/.netlify/functions/courier"
+  status = 200
+
+[[redirects]]
+  from = "/app-manifest.webmanifest"
+  to = "/.netlify/functions/pwa?asset=manifest"
+  status = 200
+
+[[redirects]]
+  from = "/app-icon-192.png"
+  to = "/.netlify/functions/pwa?asset=icon-192"
+  status = 200
+
+[[redirects]]
+  from = "/app-icon-512.png"
+  to = "/.netlify/functions/pwa?asset=icon-512"
+  status = 200
+
+[[redirects]]
+  from = "/app-icon-maskable-512.png"
+  to = "/.netlify/functions/pwa?asset=icon-maskable-512"
+  status = 200
+
+[[redirects]]
+  from = "/app-apple-touch-icon.png"
+  to = "/.netlify/functions/pwa?asset=apple-touch-icon"
+  status = 200
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
